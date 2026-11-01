@@ -74,9 +74,14 @@ class CarMapRenderer(private val car: CarContext, private val app: TuruqApp) : S
 
     override fun onVisibleAreaChanged(r: Rect) {}
 
-    override fun onScroll(dx: Float, dy: Float) { map?.moveCamera(CameraUpdateFactory.scrollBy(dx, dy)) }
+    override fun onScroll(dx: Float, dy: Float) {
+        val m = map ?: return
+        val c = m.projection.toScreenLocation(m.cameraPosition.target!!)
+        val t = m.projection.fromScreenLocation(android.graphics.PointF(c.x + dx, c.y + dy))
+        m.moveCamera(CameraUpdateFactory.newLatLng(t))
+    }
     override fun onScale(fx: Float, fy: Float, factor: Float) {
-        map?.moveCamera(CameraUpdateFactory.zoomBy(Math.log(factor.toDouble()) / Math.log(2.0), android.graphics.PointF(fx, fy)))
+        map?.moveCamera(CameraUpdateFactory.zoomBy(Math.log(factor.toDouble()) / Math.log(2.0), android.graphics.Point(fx.toInt(), fy.toInt())))
     }
 
     override fun onSurfaceDestroyed(c: SurfaceContainer) {

@@ -13,7 +13,6 @@ import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Row
 import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
-import androidx.car.app.model.Header
 import androidx.car.app.model.CarIcon
 import androidx.car.app.navigation.model.PlaceListNavigationTemplate
 import androidx.car.app.navigation.model.RoutePreviewNavigationTemplate
@@ -110,7 +109,7 @@ class RoutePreviewScreen(car: CarContext, private val dest: Place) : Screen(car)
         val app = carContext.turuq()
         val routes = app.routes.value
         val b = RoutePreviewNavigationTemplate.Builder()
-            .setHeader(Header.Builder().setTitle(dest.name).setStartHeaderAction(Action.BACK).build())
+            .setTitle(dest.name).setHeaderAction(Action.BACK)
             .setMapActionStrip(panOnly)
         if (routes.isEmpty()) return b.setLoading(true).build()
 
@@ -147,7 +146,7 @@ class ReportScreen(car: CarContext) : Screen(car) {
                     }.build())
             }
         }.build()
-        return GridTemplate.Builder().setHeader(Header.Builder().setTitle("ماذا ترى؟").setStartHeaderAction(Action.BACK).build())
+        return GridTemplate.Builder().setTitle("ماذا ترى؟").setHeaderAction(Action.BACK)
             .setSingleList(list).build()
     }
 }
@@ -157,6 +156,6 @@ class MapsStatusScreen(car: CarContext) : Screen(car) {
         val installed = carContext.turuq().maps.installed()
         val text = if (installed.isEmpty()) "لا توجد خرائط محمّلة بعد. افتح التطبيق على الهاتف لتنزيل محافظتك؛ ويجري التحديث تلقائياً على الواي فاي."
         else "المحافظات المحمّلة: " + Fmt.num(installed.size) + "\nتُحدَّث تلقائياً على الواي فاي."
-        return MessageTemplate.Builder(text).setHeader(Header.Builder().setTitle("الخرائط على الجهاز").setStartHeaderAction(Action.BACK).build()).build()
+        return MessageTemplate.Builder(text).setTitle("الخرائط على الجهاز").setHeaderAction(Action.BACK).build()
     }
 }
