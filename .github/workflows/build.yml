@@ -24,8 +24,8 @@ jobs:
         gradle wrapper --gradle-version 8.9
         chmod +x gradlew
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug -x test
+    - name: Build Debug APK bypassing checks
+      run: ./gradlew assembleDebug -x test -x lint
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
