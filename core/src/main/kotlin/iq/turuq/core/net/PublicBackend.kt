@@ -58,23 +58,81 @@ class PublicBackend(context: Context, private val http: OkHttpClient, private va
         }
     }
 
-    suspend fun search(q: String, near: GeoPoint?): List<Place> = withContext(Dispatchers.IO) {
-        val nq = norm(q)
-        val local = govs.filter { norm(it.first).contains(nq) }.map { Place("gov-${it.first}", it.first, "محافظة", it.second, it.third) }
-        if (q.length < 3) return@withContext local
+    /** تسمية عربية لنوع المكان القادم من OpenStreetMap. */
+    private fun kindAr(key: String?, value: String?): String = when (value) {
+        "hospital" -> "مستشفى"; "clinic", "doctors" -> "عيادة"; "pharmacy" -> "صيدلية"
+        "university" -> "جامعة"; "college" -> "كلية"; "school" -> "مدرسة"; "kindergarten" -> "روضة"
+        "townhall", "government", "courthouse", "public_building" -> "دائرة حكومية"
+        "police" -> "شرطة"; "fire_station" -> "إطفاء"; "post_office" -> "بريد"; "bank" -> "مصرف"
+        "mosque" -> "جامع"; "place_of_worship" -> "دار عبادة"; "church" -> "كنيسة"
+        "fuel" -> "محطة وقود"; "restaurant" -> "مطعم"; "cafe" -> "مقهى"; "hotel" -> "فندق"
+        "mall", "supermarket", "marketplace" -> "سوق"; "bus_station" -> "كراج"; "aerodrome", "airport" -> "مطار"
+        "stadium" -> "ملعب"; "park" -> "منتزه"; "bridge" -> "جسر"; "monument", "memorial" -> "نصب"
+        "city" -> "مدينة"; "town" -> "بلدة"; "village" -> "قرية"; "suburb", "neighbourhood", "quarter" -> "منطقة"
+        "residential", "primary", "secondary", "tertiary", "trunk", "motorway" -> "شارع"
+        else -> when (key) { "highway" -> "شارع"; "building" -> "بناية"; "place" -> "منطقة"; else -> "" }
+    }
+
+    private fun mk(id: String, name: String, kind: String, city: String?, lat: Double, lon: Double): Place {
+        val area = listOfNotNull(kind.ifBlank { null }, city?.ifBlank { null }).joinToString(" · ")
+        return Place(id, name, area, lat, lon)
+    }
+
+    private fun photonSearch(q: String, near: GeoPoint?): List<Place> {
+        val b = "https://photon.komoot.io/api/".toHttpUrl().newBuilder()
+            .addQueryParameter("q", q).addQueryParameter("limit", "10").addQueryParameter("bbox", "38.7,29.0,48.7,37.5")
+        if (near != null) { b.addQueryParameter("lat", near.lat.toString()); b.addQueryParameter("lon", near.lon.toString()) }
+        val feats = json.parseToJsonElement(get(b.build().toString())).jsonObject["features"]?.jsonArray ?: return emptyList()
+        return feats.mapNotNull { e ->
+            val o = e.jsonObject; val pr = o["properties"]?.jsonObject ?: return@mapNotNull null
+            if (pr["countrycode"]?.jsonPrimitive?.content?.uppercase() != "IQ") return@mapNotNull null
+            val name = pr["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val c = o["geometry"]?.jsonObject?.get("coordinates")?.jsonArray ?: return@mapNotNull null
+            val city = pr["city"]?.jsonPrimitive?.content ?: pr["district"]?.jsonPrimitive?.content ?: pr["state"]?.jsonPrimitive?.content
+            mk("ph-${pr["osm_id"]?.jsonPrimitive?.content}", name, kindAr(pr["osm_key"]?.jsonPrimitive?.content, pr["osm_value"]?.jsonPrimitive?.content),
+                city, c[1].jsonPrimitive.doubleOrNull ?: return@mapNotNull null, c[0].jsonPrimitive.doubleOrNull ?: return@mapNotNull null)
+        }
+    }
+
+    private fun nominatimSearch(q: String, near: GeoPoint?): List<Place> {
         val b = "https://nominatim.openstreetmap.org/search".toHttpUrl().newBuilder()
-            .addQueryParameter("format", "jsonv2").addQueryParameter("limit", "8").addQueryParameter("accept-language", "ar")
-            .addQueryParameter("q", q)
+            .addQueryParameter("format", "jsonv2").addQueryParameter("limit", "10").addQueryParameter("accept-language", "ar")
+            .addQueryParameter("countrycodes", "iq").addQueryParameter("addressdetails", "1").addQueryParameter("q", q)
         if (near != null) b.addQueryParameter("viewbox", "${near.lon - 1.0},${near.lat + 1.0},${near.lon + 1.0},${near.lat - 1.0}")
-        val remote = runCatching {
-            json.parseToJsonElement(get(b.build().toString())).jsonArray.mapNotNull { e ->
-                val o = e.jsonObject
-                val full = o["display_name"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                Place("osm-${o["place_id"]?.jsonPrimitive?.content}", o["name"]?.jsonPrimitive?.content?.ifBlank { null } ?: full.substringBefore(","),
-                    full, o["lat"]!!.jsonPrimitive.content.toDouble(), o["lon"]!!.jsonPrimitive.content.toDouble())
-            }
-        }.getOrDefault(emptyList())
-        (local + remote).take(8)
+        return json.parseToJsonElement(get(b.build().toString())).jsonArray.mapNotNull { e ->
+            val o = e.jsonObject
+            val full = o["display_name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val addr = o["address"]?.jsonObject
+            val city = listOf("city", "town", "suburb", "state").firstNotNullOfOrNull { addr?.get(it)?.jsonPrimitive?.content }
+            val name = o["name"]?.jsonPrimitive?.content?.ifBlank { null } ?: full.substringBefore("،").substringBefore(",")
+            mk("osm-${o["place_id"]?.jsonPrimitive?.content}", name, kindAr(o["category"]?.jsonPrimitive?.content, o["type"]?.jsonPrimitive?.content),
+                city, o["lat"]!!.jsonPrimitive.content.toDouble(), o["lon"]!!.jsonPrimitive.content.toDouble())
+        }
+    }
+
+    /**
+     * بحث المعالم: المحافظات فوراً دون إنترنت، ثم Photon (يقبل كتابة جزئية) وNominatim معاً
+     * ضمن حدود العراق فقط، مع إزالة المكرر والترتيب بالتطابق ثم القرب من موقعك.
+     */
+    suspend fun search(q: String, near: GeoPoint?): List<Place> = withContext(Dispatchers.IO) {
+        val qq = q.trim()
+        val nq = norm(qq)
+        val local = govs.filter { norm(it.first).contains(nq) }.map { Place("gov-${it.first}", it.first, "محافظة", it.second, it.third) }
+        if (qq.length < 2) return@withContext local
+        val remote = ArrayList<Place>()
+        runCatching { remote += photonSearch(qq, near) }
+        if (qq.length >= 3) runCatching { remote += nominatimSearch(qq, near) }
+        val seen = ArrayList<Place>()
+        for (p in remote) {
+            if (seen.none { norm(it.name) == norm(p.name) && Geo.distanceM(GeoPoint(it.lat, it.lon), GeoPoint(p.lat, p.lon)) < 400.0 }) seen += p
+        }
+        fun score(p: Place): Double {
+            val n = norm(p.name)
+            val match = when { n == nq -> 0.0; n.startsWith(nq) -> 1.0; n.contains(nq) -> 2.0; else -> 3.0 }
+            val dist = if (near != null) Geo.distanceM(near, GeoPoint(p.lat, p.lon)) / 1000.0 else 0.0
+            return match * 100000.0 + dist
+        }
+        (local + seen.sortedBy { score(it) }).take(10)
     }
 
     // ---------- المسارات ----------
