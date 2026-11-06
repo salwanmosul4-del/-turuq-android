@@ -1,5 +1,0 @@
--keepclassmembers class * { @kotlinx.serialization.SerialName <fields>; }
--keep,includedescriptorclasses class iq.turuq.core.model.**$$serializer { *; }
--keepclassmembers class iq.turuq.core.model.** { *** Companion; }
--keep class org.maplibre.** { *; }
--dontwarn org.maplibre.**
